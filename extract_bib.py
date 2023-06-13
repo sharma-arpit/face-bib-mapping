@@ -84,9 +84,9 @@ with open("results_error.csv", "w") as csvfile:
                     human += 1
 
                     runner = Runner(filename=filename, img=img)
-                    runner.body_location = body_box
-                    runner.detect_face()
-                    runner.embeddings()
+                    runner.body_location = body_box                                                                      # Save the body box of the runner
+                    runner.detect_face()                                                                                 # Detects faces in the body box
+                    runner.embeddings()                                                                                  # Calculate the embedding vector for the detected faces
 
                     bib_detections = []
 

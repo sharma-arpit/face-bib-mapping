@@ -5,6 +5,7 @@ import numpy as np
 import dlib
 import face_recognition
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+from keras_facenet import FaceNet
 
 text_processor = TrOCRProcessor.from_pretrained('microsoft/trocr-large-stage1')
 text_model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-stage1')
@@ -148,6 +149,16 @@ def save_photo(organize_dir, extract_dir, bib_number, filename):
     shutil.copy(os.path.join(extract_dir, filename), os.path.join(bib_dir, filename))
 
 
+def draw_rectangle(img, boxes, font_color = (0, 255, 0), font_scale = 5.0, font = cv2.FONT_HERSHEY_SIMPLEX,
+                   thickness = 10):
+
+    for i, (x1, y1, x2, y2) in enumerate(boxes):
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 10)
+        cv2.putText(img, str(i + 1), (x1, y1), font, font_scale, font_color, thickness)
+
+    return img
+
+
 class Participant:
     """
     A class to hold all possible data for a particular human participant found in an image.
@@ -170,71 +181,57 @@ class Participant:
 
 class Runner:
 
-    def __init__(self, filename=None, mode="dlib", img=None):
+    def __init__(self, filename=None, img=None):
 
         self.filename = filename
         self.image = img
         self.body_location = None
         self.face_location = list()
+        self.face_crops = None
         self.bib_location = None
         self.bib_number = None
         self.face_vectors = None
         self.identified = False
-        self.detector = None
-        self.mode = mode
+        self.detector = FaceNet()
 
-    def detect_face(self, img=None, scaleFactor=1.5, minNeighbors=5, minSize=(100, 100)):
+    def detect_face(self, img=None, threshold=0.95):
 
-        if self.image is None and img is None:
-            raise Exception(f"No Image found.")
-
+        save = False
         if img is None:
-            img = self.image
+            save = True
+            (x1, y1, x2, y2) = self.body_location
+            img = self.image[y1:y2, x1:x2].copy()
 
-        (x1, y1, x2, y2) = self.body_location
+        detections, face_crops = self.detector.crop(img, threshold=threshold)
+        face_location = []
 
-        if self.mode == "dlib":
+        for d in detections:
+            face_location.append(convert_opencv_to_dlib((d['box'][0] + x1, d['box'][1] + y1, d['box'][2], d['box'][3])))
 
-            self.detector = dlib.get_frontal_face_detector()
-            face_locations = self.detector(img[y1:y2, x1:x2], 1)
+        if save:
+            self.face_location = face_location
+            self.face_crops = face_crops
 
-            for face in face_locations:
-                self.face_location.append((face.tl_corner().x + x1, face.tl_corner().y + y1, face.br_corner().x + x1, face.br_corner().y + y1))
+        return face_location, face_crops
 
-        elif self.mode == "cv":
+    def embeddings(self, imgs=None):
 
-            self.detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-            face_locations = self.detector.detectMultiScale(cv2.cvtColor(img[y1:y2, x1:x3], cv2.COLOR_RGB2GRAY),
-                                                            scaleFactor=scaleFactor, minNeighbors=minNeighbors,
-                                                            minSize=minSize)
+        save = False
+        if imgs is None:
+            save = True
+            imgs = self.face_crops
 
-            for face in face_locations:
-                self.face_location.append(convert_opencv_to_dlib(face))
+        face_vectors = self.detector.embeddings(imgs)
 
-        else:
-            raise Exception(f"Invalid detection mode: {self.mode}")
+        if save:
+            self.face_vectors = face_vectors
 
-        return self.face_location
+        return face_vectors
 
-    def embeddings(self, model='large', jitters=1):
+    def similarity(self, embedding1, embedding2):
 
-        self.face_vectors = face_recognition.face_encodings(self.image, known_face_locations=self.face_location,
-                                                          num_jitters=jitters, model=model)
+        return self.detector.compute_distance(embedding1, embedding2)
 
-        return self.face_vectors
-
-    def draw_rectangle(self, img):
-
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 5.0
-        font_color = (0, 255, 0)  # Green color in BGR format
-        thickness = 10
-
-        for i, (x1, y1, x2, y2) in enumerate(self.face_location):
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 10)
-            cv2.putText(img, str(i + 1), (x1, y1), font, font_scale, font_color, thickness)
-
-        return img
 
     def __repr__(self):
         return f"{self.filename}:{self.bib_number}:{self.body_location}:{self.face_location}:{self.bib_location}"
