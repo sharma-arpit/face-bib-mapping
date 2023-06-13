@@ -104,7 +104,126 @@ class Detector:
         return cls_and_box
 
 
+class Participant:
+    """
+    A class to hold all available data for a particular human participant found in all images.
+    """
+
+    def __init__(self, bib_number=None):
+
+        self.bib_number = bib_number
+        self.list_of_images = list()
+        self.meta_data = dict()
+        self.face_embeddings = {}
+
+
+    def add_new_sample(self, filename, runner=None):
+        """
+        Adds a new sample found in the images for the same person based on the bib number
+        :param filename (str): image file name
+        :param runner (Runner object): a Runner object for a person from the image
+        :return: None
+        """
+
+        self.meta_data[filename] = {"body": runner.body_location, "face": runner.face_location, "bib": runner.bib_location}
+        self.face_embeddings[filename] = runner.face_vectors
+        self.list_of_images.append(filename)
+
+        return None
+
+
+class Runner:
+    """
+    A class to extract data for a particular runner in a particular image.
+    """
+
+    def __init__(self, filename=None, img=None):
+
+        self.filename = filename
+        self.image = img
+        self.body_location = None
+        self.face_location = list()
+        self.face_crops = None
+        self.bib_location = None
+        self.bib_number = None
+        self.face_vectors = None
+        self.identified = False
+        self.detector = FaceNet()
+
+    def detect_face(self, img=None, threshold=0.95):
+        """
+        Detect faces in an image using MTCNN model based face detector
+        :param img: cv2.imread object to detect faces
+        :param threshold: confidence score for face detection
+        :return: list of tuples containing face boxes and a list of cropped face arrays from the image
+        """
+
+        save = False
+        if img is None:
+            save = True
+            (x1, y1, x2, y2) = self.body_location
+            img = self.image[y1:y2, x1:x2].copy()
+
+        detections, face_crops = self.detector.crop(img, threshold=threshold)
+        face_location = []
+
+        for d in detections:
+            face_location.append(convert_opencv_to_dlib((d['box'][0] + x1, d['box'][1] + y1, d['box'][2], d['box'][3])))
+
+        if save:
+            self.face_location = face_location
+            self.face_crops = face_crops
+
+        return face_location, face_crops
+
+    def embeddings(self, imgs=None):
+        """
+        Calculates the embeddings using FaceNet face descriptor
+        :param imgs: list of cropped face arrays
+        :return: a list of embeddings, one for each face
+        """
+
+        save = False
+        if imgs is None:
+            save = True
+            imgs = self.face_crops
+
+        face_vectors = self.detector.embeddings(imgs)
+
+        if save:
+            self.face_vectors = face_vectors
+
+        return face_vectors
+
+    def distance(self, embedding1, embedding2):
+        """
+        Calculate cosine distance between 2 face embedding vectors. Small distance for same person
+        and large distance for different person
+        :param embedding1: face vector for first face to compare
+        :param embedding2: face vector for second face to compare
+        :return: a float number which represent distance
+        """
+
+        return self.detector.compute_distance(embedding1, embedding2)
+
+    def __repr__(self):
+        return f"{self.filename}:{self.bib_number}:{self.body_location}:{self.face_location}:{self.bib_location}"
+
+
+class FaceCluster:
+
+    def __init__(self, identified_runners=None, unidentified=None):
+        self.runners = identified_runners
+        self.not_runners = unidentified
+
+
 def process_image(image):
+    """
+    Extracts the text from the cropped bib image
+
+    :param image (cv2.imread obj): cropped image of bib
+    :return: text extracted from the image
+    """
     pixel_values = text_processor(image, return_tensors="pt").pixel_values
     generated_ids = text_model.generate(pixel_values)
     generated_text = text_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
@@ -112,6 +231,12 @@ def process_image(image):
 
 
 def convert_opencv_to_dlib(bbox_opencv):
+    """
+    Converts opencv format of bounding boxes (x, y, w, h) to dlib format bounding boxes (x1, y1, x2, y2)
+
+    :param bbox_opencv (tuple): (x, y, w, h) bounding box
+    :return: (tuple) (x1, y1, x2, y2) dlib format bounding box
+    """
     x, y, width, height = bbox_opencv
 
     left = x
@@ -142,96 +267,39 @@ def is_tbt(bib_number):
 
 
 def save_photo(organize_dir, extract_dir, bib_number, filename):
+    """
+    Copy the photo in bib_number folder in organize_dir
+
+    :param organize_dir (str): path to directory where file will be copied
+    :param extract_dir (str): path to directory where original file is present
+    :param bib_number (str): bib number (folder name) to copy the file
+    :param filename (str): name of the file
+    :return: None
+    """
     bib_dir = os.path.join(organize_dir, str(bib_number))
     if not os.path.exists(bib_dir):
         os.makedirs(bib_dir)
     # Copy the photo to the folder with the same name as the bib number
     shutil.copy(os.path.join(extract_dir, filename), os.path.join(bib_dir, filename))
 
+    return None
 
 def draw_rectangle(img, boxes, font_color = (0, 255, 0), font_scale = 5.0, font = cv2.FONT_HERSHEY_SIMPLEX,
                    thickness = 10):
+    """
+    Draws boxes in the given image
+
+    :param img (cv2.imread obj): image to draw boxes
+    :param boxes (list): list of tuples containing locations of boxes
+    :param font_color (tuple): color coding for the color of the boxes (B, G, R)
+    :param font_scale (float): size of text to print in the image
+    :param font (cv2.FONT_FAMILY obj): font family for the text
+    :param thickness (int): thickness of the line in terms of number of pixel
+    :return: a image with drawn boxes at given locations
+    """
 
     for i, (x1, y1, x2, y2) in enumerate(boxes):
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 10)
         cv2.putText(img, str(i + 1), (x1, y1), font, font_scale, font_color, thickness)
 
     return img
-
-
-class Participant:
-    """
-    A class to hold all possible data for a particular human participant found in an image.
-    """
-
-    def __init__(self, bib_number=None):
-
-        self.bib_number = bib_number
-        self.list_of_images = list()
-        self.meta_data = dict()
-        self.face_embeddings = {}
-
-
-    def add_new_sample(self, filename, runner=None):
-
-        self.meta_data[filename] = {"body": runner.body_location, "face": runner.face_location, "bib": runner.bib_location}
-        self.face_embeddings[filename] = runner.face_vectors
-        self.list_of_images.append(filename)
-
-
-class Runner:
-
-    def __init__(self, filename=None, img=None):
-
-        self.filename = filename
-        self.image = img
-        self.body_location = None
-        self.face_location = list()
-        self.face_crops = None
-        self.bib_location = None
-        self.bib_number = None
-        self.face_vectors = None
-        self.identified = False
-        self.detector = FaceNet()
-
-    def detect_face(self, img=None, threshold=0.95):
-
-        save = False
-        if img is None:
-            save = True
-            (x1, y1, x2, y2) = self.body_location
-            img = self.image[y1:y2, x1:x2].copy()
-
-        detections, face_crops = self.detector.crop(img, threshold=threshold)
-        face_location = []
-
-        for d in detections:
-            face_location.append(convert_opencv_to_dlib((d['box'][0] + x1, d['box'][1] + y1, d['box'][2], d['box'][3])))
-
-        if save:
-            self.face_location = face_location
-            self.face_crops = face_crops
-
-        return face_location, face_crops
-
-    def embeddings(self, imgs=None):
-
-        save = False
-        if imgs is None:
-            save = True
-            imgs = self.face_crops
-
-        face_vectors = self.detector.embeddings(imgs)
-
-        if save:
-            self.face_vectors = face_vectors
-
-        return face_vectors
-
-    def similarity(self, embedding1, embedding2):
-
-        return self.detector.compute_distance(embedding1, embedding2)
-
-
-    def __repr__(self):
-        return f"{self.filename}:{self.bib_number}:{self.body_location}:{self.face_location}:{self.bib_location}"
