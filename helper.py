@@ -127,6 +127,7 @@ class Participant:
         self.list_of_images = list()
         self.meta_data = dict()
         self.face_embeddings = {}
+        self.mean_embeddings = None
 
 
     def add_new_sample(self, filename, runner=None):
@@ -138,7 +139,7 @@ class Participant:
         """
 
         self.meta_data[filename] = {"body": runner.body_location, "face": runner.face_location, "bib": runner.bib_location}
-        self.face_embeddings[filename] = runner.face_vectors
+        self.face_embeddings[filename] = runner.face_vectors[0]
         self.list_of_images.append(filename)
 
         return None
@@ -171,6 +172,7 @@ class Runner:
         """
 
         save = False
+        x1, y1 = 0, 0
         if img is None:
             save = True
             (x1, y1, x2, y2) = self.body_location
@@ -222,12 +224,12 @@ class Runner:
         return f"{self.filename}:{self.bib_number}:{self.body_location}:{self.face_location}:{self.bib_location}"
 
 
-class FaceCluster:
+def calculate_centroid(participants):
 
-    def __init__(self, identified_runners=None, unidentified=None):
-        self.runners = identified_runners
-        self.not_runners = unidentified
+    for bib in participants.keys():
+        participants[bib].mean_embeddings = np.mean(np.array(list(participants[bib].face_embeddings.values())), axis=0)
 
+    return participants
 
 
 def convert_opencv_to_dlib(bbox_opencv):

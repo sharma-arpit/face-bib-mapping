@@ -3,26 +3,21 @@ from transformers import DetrImageProcessor, DetrForObjectDetection
 import cv2
 import shutil
 from helper import *
-from PIL import Image
 import zipfile
 import csv
-import face_recognition
+from scipy import spatial
 
 bd_configPath = 'models/bib_detector/RBNR2_custom-yolov4-tiny-detector.cfg'
 bd_weightsPath = 'models/bib_detector/RBNR2_custom-yolov4-tiny-detector_best.weights'
 bd_classes = ['bib']
 bd = BibDetector(bd_configPath, bd_weightsPath, bd_classes)
-# True bounding box color
-true_color = [15, 252, 75]
-# Pred Bib bounding box color
-color = [252, 15, 192]
 
 human_processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
 human_model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50")
 
 # Define the local directory to download the photos to
 download_dir = "/Users/arpitsharma/Downloads"
-extract_dir = "/Users/arpitsharma/Downloads/TBT_ERROR"
+extract_dir = "/Users/arpitsharma/Downloads/TBT"
 
 # Define the directory to organize the photos into
 organize_dir = "/Users/arpitsharma/Downloads/organized_photos"
@@ -34,7 +29,7 @@ error = 0
 participants = {}
 unidentified_participants = {}
 
-with open("results_error.csv", "w") as csvfile:
+with open("results.csv", "w") as csvfile:
     csvwriter = csv.writer(csvfile)
     csvwriter.writerow(["filename", "bib_number", "error"])
 
@@ -146,4 +141,26 @@ with open("results_error.csv", "w") as csvfile:
             print("[ERROR]", filenumber, filename, err)
             continue
 
-# Use Face features to match unidentified images
+    # Use Face features to match unidentified images
+
+    participants = calculate_centroid(participants)
+
+    for filename in unidentified_participants.keys():
+
+        for runner in unidentified_participants[filename]:
+
+            average_distances = {}
+            closest = 100
+            closest_bib = None
+
+            for bib in participants.keys():
+
+                average_distances[bib] = spatial.distance.cosine(participants[bib].mean_embeddings, runner.face_vectors[0])
+
+                if average_distances[bib] < closest:
+                    closest_bib = bib
+                    closest = average_distances[bib]
+
+            if closest < 0.4:
+                save_photo(organize_dir, extract_dir, closest_bib, filename)
+                csvwriter.writerow([filename, bib_number, None])
