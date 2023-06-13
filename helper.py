@@ -7,11 +7,8 @@ import face_recognition
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from keras_facenet import FaceNet
 
-text_processor = TrOCRProcessor.from_pretrained('microsoft/trocr-large-stage1')
-text_model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-stage1')
 
-
-class Detector:
+class BibDetector:
     """
     Create YOLO object detection model in OpenCV with a given config and weights.
     Use this model to make predictions.
@@ -40,6 +37,8 @@ class Detector:
         # determine the output layer
         self.ln = self.net.getLayerNames()
         self.ln = [self.ln[i - 1] for i in self.net.getUnconnectedOutLayers()]
+        self.text_processor = TrOCRProcessor.from_pretrained('microsoft/trocr-large-stage1')
+        self.text_model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-stage1')
 
     def detect(self, img, conf):
         """
@@ -103,6 +102,19 @@ class Detector:
 
         return cls_and_box
 
+    def process_image(self, image):
+        """
+        Extracts the text from the cropped bib image
+
+        :param image (cv2.imread obj): cropped image of bib
+        :return: text extracted from the image
+        """
+
+        pixel_values = self.text_processor(image, return_tensors="pt").pixel_values
+        generated_ids = self.text_model.generate(pixel_values)
+        generated_text = self.text_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+        return generated_text
 
 class Participant:
     """
@@ -217,18 +229,6 @@ class FaceCluster:
         self.not_runners = unidentified
 
 
-def process_image(image):
-    """
-    Extracts the text from the cropped bib image
-
-    :param image (cv2.imread obj): cropped image of bib
-    :return: text extracted from the image
-    """
-    pixel_values = text_processor(image, return_tensors="pt").pixel_values
-    generated_ids = text_model.generate(pixel_values)
-    generated_text = text_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    return generated_text
-
 
 def convert_opencv_to_dlib(bbox_opencv):
     """
@@ -256,14 +256,21 @@ def convert_opencv_to_dlib(bbox_opencv):
     return bbox_dlib
 
 
-def is_tbt(bib_number):
-    if 999 < bib_number < 10000 and (str(bib_number).startswith("12") or str(bib_number).startswith("65") or
-                                     str(bib_number).startswith("30") or str(bib_number).startswith("31") or
-                                     str(bib_number).startswith("66")):
-        return True
+def is_correct(bib_number, event="TBT"):
 
-    else:
-        return False
+    if event=="TBT":
+        try:
+            bib_number = int(bib_number)
+        except ValueError as err:
+            return False
+
+        if 999 < bib_number < 10000 and (str(bib_number).startswith("12") or str(bib_number).startswith("65") or
+                                         str(bib_number).startswith("30") or str(bib_number).startswith("31") or
+                                         str(bib_number).startswith("66")):
+            return True
+
+        else:
+            return False
 
 
 def save_photo(organize_dir, extract_dir, bib_number, filename):

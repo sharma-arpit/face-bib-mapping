@@ -11,7 +11,7 @@ import face_recognition
 bd_configPath = 'models/bib_detector/RBNR2_custom-yolov4-tiny-detector.cfg'
 bd_weightsPath = 'models/bib_detector/RBNR2_custom-yolov4-tiny-detector_best.weights'
 bd_classes = ['bib']
-bd = Detector(bd_configPath, bd_weightsPath, bd_classes)
+bd = BibDetector(bd_configPath, bd_weightsPath, bd_classes)
 # True bounding box color
 true_color = [15, 252, 75]
 # Pred Bib bounding box color
@@ -102,15 +102,9 @@ with open("results_error.csv", "w") as csvfile:
                             (x1, y1, x2, y2) = convert_opencv_to_dlib(bib_box[1])
                             runner.bib_location = (x1, y1, x2, y2)
 
-                            bib_number = process_image(img[y1:y2, x1:x2])
+                            bib_number = bd.process_image(img[y1:y2, x1:x2])
 
-                            try:
-                                bib_number = int(bib_number)
-                            except Exception as err:
-                                # print(f"[ERROR] {filenumber} {filename} no bib detected.")
-                                continue
-
-                            if is_tbt(bib_number):
+                            if is_correct(bib_number, event="TBT"):
                                 bib += 1
                                 runner.bib_number = bib_number
                                 runner.identified = True
@@ -121,7 +115,9 @@ with open("results_error.csv", "w") as csvfile:
                                 participants[str(bib_number)].add_new_sample(filename, runner=runner)
 
                                 save_photo(organize_dir, extract_dir, bib_number, filename)
+
                                 csvwriter.writerow([filename, bib_number, None])
+
                             else:
                                 if filename in unidentified_participants.keys():
                                     unidentified_participants[filename] = list()
@@ -130,6 +126,10 @@ with open("results_error.csv", "w") as csvfile:
                                 # print(f"[ERROR] {filenumber} {filename} invalid bib number range:", bib_number)
                                 continue
                     else:
+                        if filename in unidentified_participants.keys():
+                            unidentified_participants[filename] = list()
+
+                        unidentified_participants[filename].append(runner)
                         # print(f"[ERROR] {filenumber} {filename} no bib detected.")
                         continue
 
