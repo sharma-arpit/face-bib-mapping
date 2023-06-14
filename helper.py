@@ -40,7 +40,7 @@ class BibDetector:
         self.text_processor = TrOCRProcessor.from_pretrained('microsoft/trocr-large-stage1')
         self.text_model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-stage1')
 
-    def detect(self, img, conf):
+    def detect(self, img, conf, swapRB=True, offset=None):
         """
         Make predictions and return classes and bounding boxes
 
@@ -54,7 +54,7 @@ class BibDetector:
         """
 
         # format image for detection
-        blob = cv2.dnn.blobFromImage(img, 1 / 255.0, (416, 416), swapRB=True, crop=False)
+        blob = cv2.dnn.blobFromImage(img, 1 / 255.0, (416, 416), swapRB=swapRB, crop=False)
 
         # get detections
         self.net.setInput(blob)
@@ -80,6 +80,11 @@ class BibDetector:
                     (centerX, centerY, width, height) = box.astype("int")
                     x = int(centerX - (width / 2))
                     y = int(centerY - (height / 2))
+
+                    if offset is not None:
+                        x = x + offset[0]
+                        y = y + offset[1]
+
                     box = [x, y, int(width), int(height)]
                     boxes.append(box)
                     confidences.append(float(confidence))
@@ -98,9 +103,26 @@ class BibDetector:
                 self.confidences.append(confidences[i])
                 self.detected_classes.append(self.classes[classIDs[i]])
 
-                cls_and_box.append([self.classes[classIDs[i]], boxes[i]])
+                cls_and_box.append(boxes[i])
 
         return cls_and_box
+
+    def de_duplicate(self, detections):
+
+        remove_idx = []
+
+        for i, detectionA in enumerate(detections):
+            for j, detectionB in enumerate(detections):
+
+                if i != j:
+                    overlap, areaA, areaB = calculate_iou(convert_opencv_to_dlib(detectionA), convert_opencv_to_dlib(detectionB))
+                    if overlap > 0.5:
+                        if areaA > areaB:
+                            remove_idx.append(j)
+                        else:
+                            remove_idx.append(i)
+
+        return [item for i, item in enumerate(detections) if i not in list(set(remove_idx))]
 
     def process_image(self, image):
         """
@@ -139,7 +161,8 @@ class Participant:
         """
 
         self.meta_data[filename] = {"body": runner.body_location, "face": runner.face_location, "bib": runner.bib_location}
-        self.face_embeddings[filename] = runner.face_vectors[0]
+        if runner.face_vectors is not None:
+            self.face_embeddings[filename] = runner.face_vectors[0]
         self.list_of_images.append(filename)
 
         return None
@@ -179,12 +202,13 @@ class Runner:
             img = self.image[y1:y2, x1:x2].copy()
 
         detections, face_crops = self.detector.crop(img, threshold=threshold)
-        face_location = []
+        face_location = list()
 
         for d in detections:
             face_location.append(convert_opencv_to_dlib((d['box'][0] + x1, d['box'][1] + y1, d['box'][2], d['box'][3])))
 
-        if save:
+        if save and len(face_location):
+            self.identified = True
             self.face_location = face_location
             self.face_crops = face_crops
 
@@ -198,13 +222,15 @@ class Runner:
         """
 
         save = False
+        face_vectors = list()
         if imgs is None:
             save = True
             imgs = self.face_crops
 
-        face_vectors = self.detector.embeddings(imgs)
+        if imgs is not None:
+            face_vectors = self.detector.embeddings(imgs)
 
-        if save:
+        if save and len(face_vectors):
             self.face_vectors = face_vectors
 
         return face_vectors
@@ -227,7 +253,8 @@ class Runner:
 def calculate_centroid(participants):
 
     for bib in participants.keys():
-        participants[bib].mean_embeddings = np.mean(np.array(list(participants[bib].face_embeddings.values())), axis=0)
+        if participants[bib].face_embeddings.values():
+            participants[bib].mean_embeddings = np.mean(np.array(list(participants[bib].face_embeddings.values())), axis=0)
 
     return participants
 
@@ -260,11 +287,13 @@ def convert_opencv_to_dlib(bbox_opencv):
 
 def is_correct(bib_number, event="TBT"):
 
+    try:
+        bib_number = int(bib_number)
+    except ValueError as err:
+        return False
+
     if event=="TBT":
-        try:
-            bib_number = int(bib_number)
-        except ValueError as err:
-            return False
+
 
         if 999 < bib_number < 10000 and (str(bib_number).startswith("12") or str(bib_number).startswith("65") or
                                          str(bib_number).startswith("30") or str(bib_number).startswith("31") or
@@ -273,6 +302,8 @@ def is_correct(bib_number, event="TBT"):
 
         else:
             return False
+
+    return True
 
 
 def save_photo(organize_dir, extract_dir, bib_number, filename):
@@ -285,6 +316,7 @@ def save_photo(organize_dir, extract_dir, bib_number, filename):
     :param filename (str): name of the file
     :return: None
     """
+
     bib_dir = os.path.join(organize_dir, str(bib_number))
     if not os.path.exists(bib_dir):
         os.makedirs(bib_dir)
@@ -312,3 +344,25 @@ def draw_rectangle(img, boxes, font_color = (0, 255, 0), font_scale = 5.0, font 
         cv2.putText(img, str(i + 1), (x1, y1), font, font_scale, font_color, thickness)
 
     return img
+
+def calculate_iou(boxA, boxB):
+    # Convert box coordinates to (x1, y1, x2, y2) format
+    x1A, y1A, x2A, y2A = boxA
+    x1B, y1B, x2B, y2B = boxB
+
+    # Calculate intersection area
+    xA = max(x1A, x1B)
+    yA = max(y1A, y1B)
+    xB = min(x2A, x2B)
+    yB = min(y2A, y2B)
+    intersection_area = max(0, xB - xA + 1) * max(0, yB - yA + 1)
+
+    # Calculate union area
+    boxA_area = (x2A - x1A + 1) * (y2A - y1A + 1)
+    boxB_area = (x2B - x1B + 1) * (y2B - y1B + 1)
+    union_area = boxA_area + boxB_area - intersection_area
+
+    # Calculate IoU
+    iou = intersection_area / float(union_area)
+
+    return iou, boxA_area, boxB_area

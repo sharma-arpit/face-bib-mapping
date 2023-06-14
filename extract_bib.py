@@ -6,6 +6,7 @@ from helper import *
 import zipfile
 import csv
 from scipy import spatial
+import torch
 
 bd_configPath = 'models/bib_detector/RBNR2_custom-yolov4-tiny-detector.cfg'
 bd_weightsPath = 'models/bib_detector/RBNR2_custom-yolov4-tiny-detector_best.weights'
@@ -31,7 +32,7 @@ unidentified_participants = {}
 
 with open("results.csv", "w") as csvfile:
     csvwriter = csv.writer(csvfile)
-    csvwriter.writerow(["filename", "bib_number", "error"])
+    csvwriter.writerow(["filename", "bib_number", "error", "mode"])
 
     for i, filename in enumerate(os.listdir(extract_dir)):
 
@@ -42,7 +43,6 @@ with open("results.csv", "w") as csvfile:
 
         try:
             try:
-                # Load the photo and convert it to grayscale
                 img = cv2.cvtColor(cv2.imread(os.path.join(extract_dir, filename)), cv2.COLOR_BGR2RGB)
             except Exception as err:
                 error += 1
@@ -62,17 +62,19 @@ with open("results.csv", "w") as csvfile:
 
             except Exception as err:
                 error += 1
-                # print(f"[ERROR] {filenumber} {filename} couldn't detect any human:", err)
+                print(f"[ERROR] {filenumber} {filename} couldn't detect any human:", err)
                 continue
 
             if len(results) == 0:
                 error += 1
-                # print(f"[ERROR] {filenumber} {filename} detected nothing.")
+                print(f"[ERROR] {filenumber} {filename} detected nothing.")
                 continue
 
-            for score, label, box in zip(results[0]["scores"], results[0]["labels"], results[0]["boxes"]):
+            bib_detections_probables = bd.detect(img, 0.20, swapRB=True) + bd.detect(img, 0.20, swapRB=False)
+            bib_detections_probables = bd.de_duplicate(bib_detections_probables)
+            print(filename, bib_detections_probables)
 
-                bib_detections_probables = bd.detect(img, 0.25)
+            for score, label, box in zip(results[0]["scores"], results[0]["labels"], results[0]["boxes"]):
 
                 if human_model.config.id2label[label.item()] == "person" and round(score.item(), 3) > 0.9:
                     body_box = [int(i) for i in box.tolist()]
@@ -86,23 +88,33 @@ with open("results.csv", "w") as csvfile:
                     bib_detections = []
 
                     for bib_box in bib_detections_probables:
-                        (x, y, w, h) = bib_box[1]
+                        (x, y, w, h) = bib_box
 
                         if x >= body_box[0] and y >= body_box[1] and x + w <= body_box[2] and y + h <= body_box[3]:
-                            bib_detections.append(['bib', [x, y, w, h]])
+                            bib_detections.append((x, y, w, h))
+
+                    if len(bib_detections) == 0:
+                        body = img[body_box[1]:body_box[3], body_box[0]:body_box[2]]
+                        bib_detections = bd.detect(body, 0.2, swapRB=True, offset=body_box) + bd.detect(body, 0.2,
+                                                                                                        swapRB=False,
+                                                                                                        offset=body_box)
+                        bib_detections = bd.de_duplicate(bib_detections)
+
+                        print(filename, bib_detections)
 
                     if len(bib_detections):
 
                         for bib_box in bib_detections:
-                            (x1, y1, x2, y2) = convert_opencv_to_dlib(bib_box[1])
+                            (x1, y1, x2, y2) = convert_opencv_to_dlib(bib_box)
                             runner.bib_location = (x1, y1, x2, y2)
 
                             bib_number = bd.process_image(img[y1:y2, x1:x2])
 
-                            if is_correct(bib_number, event="TBT"):
+                            if is_correct(bib_number, event="TBTT"):
                                 bib += 1
                                 runner.bib_number = bib_number
                                 runner.identified = True
+                                print("Found bib number:", bib_number)
 
                                 if str(bib_number) not in participants.keys():
                                     participants[str(bib_number)] = Participant(bib_number=bib_number)
@@ -111,21 +123,25 @@ with open("results.csv", "w") as csvfile:
 
                                 save_photo(organize_dir, extract_dir, bib_number, filename)
 
-                                csvwriter.writerow([filename, bib_number, None])
+                                csvwriter.writerow([filename, bib_number, None, "bib"])
 
                             else:
-                                if filename in unidentified_participants.keys():
+                                if filename not in unidentified_participants.keys() and runner.identified:
                                     unidentified_participants[filename] = list()
 
-                                unidentified_participants[filename].append(runner)
-                                # print(f"[ERROR] {filenumber} {filename} invalid bib number range:", bib_number)
-                                continue
+                                if runner.identified:
+                                    unidentified_participants[filename].append(runner)
+
+                                print(f"[ERROR] {filenumber} {filename} invalid bib number range:", bib_number)
+
                     else:
-                        if filename in unidentified_participants.keys():
+                        if filename not in unidentified_participants.keys() and runner.identified:
                             unidentified_participants[filename] = list()
 
-                        unidentified_participants[filename].append(runner)
-                        # print(f"[ERROR] {filenumber} {filename} no bib detected.")
+                        if runner.identified:
+                            unidentified_participants[filename].append(runner)
+
+                        print(f"[ERROR] {filenumber} {filename} no bib detected.")
                         continue
 
             if human == 0 or bib == 0:
@@ -141,8 +157,9 @@ with open("results.csv", "w") as csvfile:
             print("[ERROR]", filenumber, filename, err)
             continue
 
-    # Use Face features to match unidentified images
+    print("Face Clustering Started.....")
 
+    # Use Face features to match unidentified images
     participants = calculate_centroid(participants)
 
     for filename in unidentified_participants.keys():
@@ -162,5 +179,6 @@ with open("results.csv", "w") as csvfile:
                     closest = average_distances[bib]
 
             if closest < 0.4:
+                print(f"{filename} - {closest_bib}")
                 save_photo(organize_dir, extract_dir, closest_bib, filename)
-                csvwriter.writerow([filename, bib_number, None])
+                csvwriter.writerow([filename, bib_number, None, "face"])
