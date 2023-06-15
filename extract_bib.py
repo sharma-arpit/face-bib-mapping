@@ -7,6 +7,8 @@ import zipfile
 import csv
 from scipy import spatial
 import torch
+import pandas as pd
+
 
 bd_configPath = 'models/bib_detector/RBNR2_custom-yolov4-tiny-detector.cfg'
 bd_weightsPath = 'models/bib_detector/RBNR2_custom-yolov4-tiny-detector_best.weights'
@@ -17,8 +19,7 @@ human_processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
 human_model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50")
 
 # Define the local directory to download the photos to
-download_dir = "/Users/arpitsharma/Downloads"
-extract_dir = "/Users/arpitsharma/Downloads/TBT"
+photos_dir = "/Users/arpitsharma/Downloads/TBT"
 
 # Define the directory to organize the photos into
 organize_dir = "/Users/arpitsharma/Downloads/organized_photos"
@@ -34,7 +35,7 @@ with open("results.csv", "w") as csvfile:
     csvwriter = csv.writer(csvfile)
     csvwriter.writerow(["filename", "bib_number", "error", "mode"])
 
-    for i, filename in enumerate(os.listdir(extract_dir)):
+    for i, filename in enumerate(os.listdir(photos_dir)):
 
         filenumber = i + 1
         human = 0
@@ -43,7 +44,7 @@ with open("results.csv", "w") as csvfile:
 
         try:
             try:
-                img = cv2.cvtColor(cv2.imread(os.path.join(extract_dir, filename)), cv2.COLOR_BGR2RGB)
+                img = cv2.cvtColor(cv2.imread(os.path.join(photos_dir, filename)), cv2.COLOR_BGR2RGB)
             except Exception as err:
                 error += 1
                 csvwriter.writerow([filename, "", err])
@@ -80,10 +81,9 @@ with open("results.csv", "w") as csvfile:
                     body_box = [int(i) for i in box.tolist()]
                     human += 1
 
-                    runner = Runner(filename=filename, img=img)
+                    runner = Runner(filename=filename)
                     runner.body_location = body_box                                                                      # Save the body box of the runner
-                    runner.detect_face()                                                                                 # Detects faces in the body box
-                    runner.embeddings()                                                                                  # Calculate the embedding vector for the detected faces
+                    runner.embeddings(img)                                                                                  # Calculate the embedding vector for the detected faces
 
                     bib_detections = []
 
@@ -110,7 +110,7 @@ with open("results.csv", "w") as csvfile:
 
                             bib_number = bd.process_image(img[y1:y2, x1:x2])
 
-                            if is_correct(bib_number, event="TBTT"):
+                            if is_correct(bib_number, event="TBT"):
                                 bib += 1
                                 runner.bib_number = bib_number
                                 runner.identified = True
@@ -120,8 +120,8 @@ with open("results.csv", "w") as csvfile:
                                     participants[str(bib_number)] = Participant(bib_number=bib_number)
 
                                 participants[str(bib_number)].add_new_sample(filename, runner=runner)
-
-                                save_photo(organize_dir, extract_dir, bib_number, filename)
+                                runner = None
+                                save_photo(organize_dir, photos_dir, bib_number, filename)
 
                                 csvwriter.writerow([filename, bib_number, None, "bib"])
 
@@ -131,6 +131,8 @@ with open("results.csv", "w") as csvfile:
 
                                 if runner.identified:
                                     unidentified_participants[filename].append(runner)
+                                else:
+                                    runner = None
 
                                 print(f"[ERROR] {filenumber} {filename} invalid bib number range:", bib_number)
 
@@ -140,6 +142,8 @@ with open("results.csv", "w") as csvfile:
 
                         if runner.identified:
                             unidentified_participants[filename].append(runner)
+                        else:
+                            runner = None
 
                         print(f"[ERROR] {filenumber} {filename} no bib detected.")
                         continue
@@ -149,18 +153,17 @@ with open("results.csv", "w") as csvfile:
                 err = f"[ERROR] {filenumber} {filename} no human or bib detected. humans: {human} & bibs: {bib}"
                 csvwriter.writerow([filename, "", err])
                 print(err)
-                continue
 
         except Exception as err:
             error += 1
             csvwriter.writerow([filename, "", err])
             print("[ERROR]", filenumber, filename, err)
-            continue
 
     print("Face Clustering Started.....")
 
     # Use Face features to match unidentified images
-    participants = calculate_centroid(participants)
+    for participant in participants:
+        participant.calculate_centroid()
 
     for filename in unidentified_participants.keys():
 
@@ -180,5 +183,5 @@ with open("results.csv", "w") as csvfile:
 
             if closest < 0.4:
                 print(f"{filename} - {closest_bib}")
-                save_photo(organize_dir, extract_dir, closest_bib, filename)
+                save_photo(organize_dir, photos_dir, closest_bib, filename)
                 csvwriter.writerow([filename, bib_number, None, "face"])

@@ -2,11 +2,11 @@ import cv2
 import os
 import shutil
 import numpy as np
-import dlib
-import face_recognition
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from keras_facenet import FaceNet
 
+
+face_detector = FaceNet()
 
 class BibDetector:
     """
@@ -167,6 +167,13 @@ class Participant:
 
         return None
 
+    def calculate_centroid(self):
+
+        if self.face_embeddings.values():
+            self.mean_embeddings = np.mean(np.array(list(self.face_embeddings.values())), axis=0)
+
+        return self.mean_embeddings
+
 
 class Runner:
     """
@@ -176,15 +183,12 @@ class Runner:
     def __init__(self, filename=None, img=None):
 
         self.filename = filename
-        self.image = img
         self.body_location = None
         self.face_location = list()
-        self.face_crops = None
         self.bib_location = None
         self.bib_number = None
         self.face_vectors = None
         self.identified = False
-        self.detector = FaceNet()
 
     def detect_face(self, img=None, threshold=0.95):
         """
@@ -194,46 +198,37 @@ class Runner:
         :return: list of tuples containing face boxes and a list of cropped face arrays from the image
         """
 
-        save = False
-        x1, y1 = 0, 0
-        if img is None:
-            save = True
-            (x1, y1, x2, y2) = self.body_location
-            img = self.image[y1:y2, x1:x2].copy()
+        (x1, y1, x2, y2) = self.body_location
 
-        detections, face_crops = self.detector.crop(img, threshold=threshold)
+        detections, face_crops = face_detector.crop(img[y1:y2, x1:x2].copy(), threshold=threshold)
         face_location = list()
 
         for d in detections:
             face_location.append(convert_opencv_to_dlib((d['box'][0] + x1, d['box'][1] + y1, d['box'][2], d['box'][3])))
 
-        if save and len(face_location):
+        if len(face_location):
             self.identified = True
             self.face_location = face_location
-            self.face_crops = face_crops
 
         return face_location, face_crops
 
-    def embeddings(self, imgs=None):
+    def embeddings(self, img=None, threshold=0.95):
         """
         Calculates the embeddings using FaceNet face descriptor
         :param imgs: list of cropped face arrays
         :return: a list of embeddings, one for each face
         """
 
-        save = False
-        face_vectors = list()
-        if imgs is None:
-            save = True
-            imgs = self.face_crops
+        if img is not None:
+            face_locations, imgs = self.detect_face(img, threshold=threshold)
 
-        if imgs is not None:
-            face_vectors = self.detector.embeddings(imgs)
+            if len(face_locations):
+                self.face_vectors = face_detector.embeddings(imgs)
 
-        if save and len(face_vectors):
-            self.face_vectors = face_vectors
+        else:
+            print("Image invalid.")
 
-        return face_vectors
+        return self.face_vectors
 
     def distance(self, embedding1, embedding2):
         """
@@ -247,16 +242,7 @@ class Runner:
         return self.detector.compute_distance(embedding1, embedding2)
 
     def __repr__(self):
-        return f"{self.filename}:{self.bib_number}:{self.body_location}:{self.face_location}:{self.bib_location}"
-
-
-def calculate_centroid(participants):
-
-    for bib in participants.keys():
-        if participants[bib].face_embeddings.values():
-            participants[bib].mean_embeddings = np.mean(np.array(list(participants[bib].face_embeddings.values())), axis=0)
-
-    return participants
+        return f"{self.filename}::{self.bib_number}"
 
 
 def convert_opencv_to_dlib(bbox_opencv):
@@ -293,7 +279,6 @@ def is_correct(bib_number, event="TBT"):
         return False
 
     if event=="TBT":
-
 
         if 999 < bib_number < 10000 and (str(bib_number).startswith("12") or str(bib_number).startswith("65") or
                                          str(bib_number).startswith("30") or str(bib_number).startswith("31") or
@@ -346,6 +331,13 @@ def draw_rectangle(img, boxes, font_color = (0, 255, 0), font_scale = 5.0, font 
     return img
 
 def calculate_iou(boxA, boxB):
+    """
+    Calculate the intersection of union of bounding box A and bounding box B
+    :param boxA: first bounding box
+    :param boxB: second bounding box
+    :return: percentage of intersection area, area A, area B
+    """
+
     # Convert box coordinates to (x1, y1, x2, y2) format
     x1A, y1A, x2A, y2A = boxA
     x1B, y1B, x2B, y2B = boxB
