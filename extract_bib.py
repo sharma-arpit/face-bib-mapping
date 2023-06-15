@@ -19,7 +19,7 @@ human_processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
 human_model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50")
 
 # Define the local directory to download the photos to
-photos_dir = "/Users/arpitsharma/Downloads/hell_race"
+photos_dir = "/Users/arpitsharma/Downloads/TBT"
 
 # Define the directory to organize the photos into
 organize_dir = "/Users/arpitsharma/Downloads/organized_photos"
@@ -126,18 +126,15 @@ with open("results.csv", "w") as csvfile:
 
                             bib_number = bd.process_image(img[y1:y2, x1:x2])
 
-                            if is_correct(bib_number, event="TBTT"):
+                            if is_correct(bib_number, event="TBT"):
                                 bib += 1
                                 runner.bib_number = bib_number
                                 runner.identified = True
                                 print("Found bib number:", bib_number)
 
-                                runner.save(runnerwriter)
-
                                 if runner.face_vectors is not None:
+                                    runner.save(runnerwriter)
                                     identifiedwriter.writerow(list(runner.face_vectors[0]))
-                                else:
-                                    identifiedwriter.writerow(list(np.zeros(shape=(512,))))
 
                                 save_photo(organize_dir, photos_dir, bib_number, filename)
 
@@ -145,22 +142,20 @@ with open("results.csv", "w") as csvfile:
 
                             else:
                                 if runner.identified and not runner.bib_number:
-                                    runner.save(nonrunnerwriter)
+
                                     if runner.face_vectors is not None:
+                                        runner.save(nonrunnerwriter)
                                         unidentifiedwriter.writerow(list(runner.face_vectors[0]))
-                                    else:
-                                        unidentifiedwriter.writerow(list(np.zeros(shape=(512,))))
 
                                 print(f"[ERROR] {filenumber} {filename} invalid bib number range:", bib_number)
 
                     else:
 
                         if runner.identified and not runner.bib_number:
-                            runner.save(nonrunnerwriter)
+
                             if runner.face_vectors is not None:
+                                runner.save(nonrunnerwriter)
                                 unidentifiedwriter.writerow(list(runner.face_vectors[0]))
-                            else:
-                                unidentifiedwriter.writerow(list(np.zeros(shape=(512,))))
 
                         print(f"[ERROR] {filenumber} {filename} no bib detected.")
                         continue
@@ -191,8 +186,9 @@ emb_non_runner = pd.read_csv("embeddings_unidentified.csv", header=None)
 
 start_index = df_runner.columns.get_loc('bib_number')
 identified = pd.concat([df_runner.iloc[:, start_index], emb_runner], axis=1).reindex(df_runner.index)
+identified = identified.loc[~(emb_runner==0).all(axis=1)]
 
-mean_emb = np.array(identified.groupby(by='bib_number').mean())
+mean_emb = np.array(identified.groupby(by='bib_number',  sort=False).mean())
 emb = np.array(emb_non_runner)
 
 row_norms = np.linalg.norm(mean_emb, axis=1, keepdims=True)
@@ -204,11 +200,12 @@ emb = emb / row_norms
 result = 1 - np.dot(mean_emb, emb.T)
 idx = list(np.argmin(result, axis=0))
 
-indexs = list(identified.groupby(by='bib_number').mean().index)
+indexs = list(identified.groupby(by='bib_number', sort=False).mean().index)
+distance = 0.4
 
 for j, i in enumerate(idx):
 
-    if result[i][j] < 0.4:
+    if result[i][j] < distance:
 
         filename = df_non_runner['filename'][j]
         closest_bib = indexs[i]
