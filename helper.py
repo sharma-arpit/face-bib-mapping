@@ -241,6 +241,33 @@ class Runner:
 
         return self.detector.compute_distance(embedding1, embedding2)
 
+    def save(self, csvwriter):
+
+        data = {'filename': self.filename,
+                'body_x1': self.body_location[0],
+                'body_y1': self.body_location[1],
+                'body_x2': self.body_location[2],
+                'body_y2': self.body_location[3],
+                'bib_number': self.bib_number}
+
+        if len(self.face_location) == 0:
+            self.face_location.append((0, 0, 0, 0))
+
+        data['face_x1'] = self.face_location[0][0]
+        data['face_y1'] = self.face_location[0][1]
+        data['face_x2'] = self.face_location[0][2]
+        data['face_y2'] = self.face_location[0][3]
+
+        if self.bib_location is None:
+            self.bib_location = (0, 0, 0, 0)
+
+        data['bib_x1'] = self.bib_location[0]
+        data['bib_y1'] = self.bib_location[1]
+        data['bib_x2'] = self.bib_location[2]
+        data['bib_y2'] = self.bib_location[3]
+
+        csvwriter.writerow(data)
+
     def __repr__(self):
         return f"{self.filename}::{self.bib_number}"
 

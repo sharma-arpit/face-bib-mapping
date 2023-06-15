@@ -5,9 +5,9 @@ import shutil
 from helper import *
 import zipfile
 import csv
-from scipy import spatial
 import torch
 import pandas as pd
+import numpy as np
 
 
 bd_configPath = 'models/bib_detector/RBNR2_custom-yolov4-tiny-detector.cfg'
@@ -19,7 +19,7 @@ human_processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
 human_model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50")
 
 # Define the local directory to download the photos to
-photos_dir = "/Users/arpitsharma/Downloads/TBT"
+photos_dir = "/Users/arpitsharma/Downloads/hell_race"
 
 # Define the directory to organize the photos into
 organize_dir = "/Users/arpitsharma/Downloads/organized_photos"
@@ -28,8 +28,24 @@ if not os.path.exists(organize_dir):
 
 # Loop over all photos in the download directory
 error = 0
-participants = {}
-unidentified_participants = {}
+
+participants = open("participants.csv", mode='w')
+nonparticipants = open("non_participants.csv", mode='w')
+
+fields = ["filename","body_x1", "body_y1", "body_x2", "body_y2", "face_x1", "face_y1", "face_x2", "face_y2",
+          "bib_x1", "bib_y1", "bib_x2", "bib_y2", "bib_number"]
+
+runnerwriter = csv.DictWriter(participants, fieldnames=fields)
+runnerwriter.writeheader()
+
+nonrunnerwriter = csv.DictWriter(nonparticipants, fieldnames=fields)
+nonrunnerwriter.writeheader()
+
+embeddings_identified = open("embeddings_identified.csv", mode='w')
+identifiedwriter = csv.writer(embeddings_identified)
+
+embeddings_unidentified = open("embeddings_unidentified.csv", mode='w')
+unidentifiedwriter = csv.writer(embeddings_unidentified)
 
 with open("results.csv", "w") as csvfile:
     csvwriter = csv.writer(csvfile)
@@ -110,40 +126,41 @@ with open("results.csv", "w") as csvfile:
 
                             bib_number = bd.process_image(img[y1:y2, x1:x2])
 
-                            if is_correct(bib_number, event="TBT"):
+                            if is_correct(bib_number, event="TBTT"):
                                 bib += 1
                                 runner.bib_number = bib_number
                                 runner.identified = True
                                 print("Found bib number:", bib_number)
 
-                                if str(bib_number) not in participants.keys():
-                                    participants[str(bib_number)] = Participant(bib_number=bib_number)
+                                runner.save(runnerwriter)
 
-                                participants[str(bib_number)].add_new_sample(filename, runner=runner)
-                                runner = None
+                                if runner.face_vectors is not None:
+                                    identifiedwriter.writerow(list(runner.face_vectors[0]))
+                                else:
+                                    identifiedwriter.writerow(list(np.zeros(shape=(512,))))
+
                                 save_photo(organize_dir, photos_dir, bib_number, filename)
 
                                 csvwriter.writerow([filename, bib_number, None, "bib"])
 
                             else:
-                                if filename not in unidentified_participants.keys() and runner.identified:
-                                    unidentified_participants[filename] = list()
-
-                                if runner.identified:
-                                    unidentified_participants[filename].append(runner)
-                                else:
-                                    runner = None
+                                if runner.identified and not runner.bib_number:
+                                    runner.save(nonrunnerwriter)
+                                    if runner.face_vectors is not None:
+                                        unidentifiedwriter.writerow(list(runner.face_vectors[0]))
+                                    else:
+                                        unidentifiedwriter.writerow(list(np.zeros(shape=(512,))))
 
                                 print(f"[ERROR] {filenumber} {filename} invalid bib number range:", bib_number)
 
                     else:
-                        if filename not in unidentified_participants.keys() and runner.identified:
-                            unidentified_participants[filename] = list()
 
-                        if runner.identified:
-                            unidentified_participants[filename].append(runner)
-                        else:
-                            runner = None
+                        if runner.identified and not runner.bib_number:
+                            runner.save(nonrunnerwriter)
+                            if runner.face_vectors is not None:
+                                unidentifiedwriter.writerow(list(runner.face_vectors[0]))
+                            else:
+                                unidentifiedwriter.writerow(list(np.zeros(shape=(512,))))
 
                         print(f"[ERROR] {filenumber} {filename} no bib detected.")
                         continue
@@ -161,27 +178,41 @@ with open("results.csv", "w") as csvfile:
 
     print("Face Clustering Started.....")
 
-    # Use Face features to match unidentified images
-    for participant in participants:
-        participant.calculate_centroid()
+participants.close()
+nonparticipants.close()
+embeddings_identified.close()
+embeddings_unidentified.close()
 
-    for filename in unidentified_participants.keys():
+df_runner = pd.read_csv("participants.csv", header=0)
+df_non_runner = pd.read_csv("non_participants.csv", header=0)
 
-        for runner in unidentified_participants[filename]:
+emb_runner = pd.read_csv("embeddings_identified.csv", header=None)
+emb_non_runner = pd.read_csv("embeddings_unidentified.csv", header=None)
 
-            average_distances = {}
-            closest = 100
-            closest_bib = None
+start_index = df_runner.columns.get_loc('bib_number')
+identified = pd.concat([df_runner.iloc[:, start_index], emb_runner], axis=1).reindex(df_runner.index)
 
-            for bib in participants.keys():
+mean_emb = np.array(identified.groupby(by='bib_number').mean())
+emb = np.array(emb_non_runner)
 
-                average_distances[bib] = spatial.distance.cosine(participants[bib].mean_embeddings, runner.face_vectors[0])
+row_norms = np.linalg.norm(mean_emb, axis=1, keepdims=True)
+mean_emb = mean_emb / row_norms
 
-                if average_distances[bib] < closest:
-                    closest_bib = bib
-                    closest = average_distances[bib]
+row_norms = np.linalg.norm(emb, axis=1, keepdims=True)
+emb = emb / row_norms
 
-            if closest < 0.4:
-                print(f"{filename} - {closest_bib}")
-                save_photo(organize_dir, photos_dir, closest_bib, filename)
-                csvwriter.writerow([filename, bib_number, None, "face"])
+result = 1 - np.dot(mean_emb, emb.T)
+idx = list(np.argmin(result, axis=0))
+
+indexs = list(identified.groupby(by='bib_number').mean().index)
+
+for j, i in enumerate(idx):
+
+    if result[i][j] < 0.4:
+
+        filename = df_non_runner['filename'][j]
+        closest_bib = indexs[i]
+
+        print(f"{filename} - {closest_bib}")
+        save_photo(organize_dir, photos_dir, closest_bib, filename)
+        # csvwriter.writerow([filename, bib_number, None, "face"])
