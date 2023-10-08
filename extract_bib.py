@@ -99,7 +99,7 @@ with open("results.csv", "w") as csvfile:
 
                     runner = Runner(filename=filename)
                     runner.body_location = body_box                                                                      # Save the body box of the runner
-                    runner.embeddings(img)                                                                                  # Calculate the embedding vector for the detected faces
+                    runner.embeddings(img)                                                                               # Calculate the embedding vector for the detected faces
 
                     bib_detections = []
 

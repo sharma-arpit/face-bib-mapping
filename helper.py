@@ -314,6 +314,15 @@ def is_correct(bib_number, event="TBT"):
 
         else:
             return False
+    elif event=="SSU":
+
+        if 999 < bib_number < 10000 and (str(bib_number).startswith("14") or str(bib_number).startswith("60") or
+                                         str(bib_number).startswith("30") or str(bib_number).startswith("31") or
+                                         str(bib_number).startswith("61") or str(bib_number).startswith("10")):
+            return True
+
+        else:
+            return False
 
     return True
 
